@@ -1,1 +1,8 @@
-[{"home": "Error", "away": "403 Client Error: Forbidden for url: https://www.scoreaxis.com/widget/live-matches/8920", "score": "X"}]
+[
+  {
+    "home": "Wolverhampton Wanderers",
+    "away": "Aston Villa",
+    "score": "2 - 0",
+    "time": "FT"
+  }
+]
