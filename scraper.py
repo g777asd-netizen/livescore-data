@@ -1,83 +1,97 @@
 import requests
 from bs4 import BeautifulSoup
 import json
-import os
+import random
+import time
 from datetime import datetime
 
-# دالة لتنظيف النصوص
-def clean_text(text):
-    return text.strip() if text else ""
-
 def scrape_scoreaxis():
-    # الرابط المستهدف
     url = "https://www.scoreaxis.com/"
     
-    # يجب وضع User-Agent لكي يظن الموقع أننا متصفح عادي ولسنا روبوت
+    # قائمة بمتصفحات مختلفة للخداع
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0'
+    ]
+    
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': random.choice(user_agents),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Referer': 'https://www.google.com/',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
     }
 
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status() # للتأكد أن الصفحة فتحت بنجاح
+        # ننتظر ثانية عشوائية لتقليل الشك
+        time.sleep(2)
+        
+        session = requests.Session()
+        response = session.get(url, headers=headers, timeout=15)
+        
+        if response.status_code == 403:
+            print("❌ الموقع لا يزال يحظر الاتصال (Error 403).")
+            # محاولة احتياطية: استخدام رابط Widget مباشر (أسهل في السحب)
+            url = "https://www.scoreaxis.com/widget/live-matches/8920" 
+            print("🔄 جاري المحاولة مع رابط الـ Widget...")
+            response = session.get(url, headers=headers, timeout=15)
+
+        response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
         matches_data = []
 
-        # ملاحظة: هذه الـ Classes (مثل match-item) هي تخمينية وتعتمد على تحليل الموقع
-        # ستحتاج لتغييرها بناء على ما نراه في "Inspect Element" للموقع الحقيقي
-        # سنبدأ بسحب كل العناصر التي قد تحتوي على مباريات
+        # البحث في الـ Widget (بنية مختلفة قليلاً وأسهل)
+        match_rows = soup.find_all('div', class_='match-row') # محاولة 1
         
-        # لنفترض أن الموقع يضع المباريات في جدول أو div
-        # هذا الجزء يحتاج لتجربة، سأكتب كوداً يبحث عن الهيكل العام
-        
-        # البحث عن حاويات المباريات (تحتاج لتحديث حسب كود الموقع الحالي)
-        # في scoreaxis عادة تكون المباريات داخل روابط <a> أو div بأسماء معينة
-        games = soup.find_all('div', class_='match-event') # مثال لاسم كلاس شائع
+        if not match_rows:
+            match_rows = soup.select('.match-container, .event-row') # محاولة 2
 
-        if not games:
-            # محاولة بديلة إذا كان الاسم مختلفاً
-            games = soup.find_all('tr') # البحث في الجداول
+        print(f"✅ تم العثور على {len(match_rows)} عنصر محتمل.")
 
-        for game in games:
+        for item in match_rows:
             try:
-                # محاولة استخراج الفريقين والنتيجة
-                # هذه الأسماء home-team, away-team يجب التأكد منها من الموقع
-                home = clean_text(game.find(class_='home-team').text)
-                away = clean_text(game.find(class_='away-team').text)
-                score = clean_text(game.find(class_='score').text)
+                # استخراج الأسماء بناء على الكلاسات الشائعة في الودجت
+                home = item.find(class_='home').text.strip()
+                away = item.find(class_='away').text.strip()
+                score = item.find(class_='score').text.strip()
                 
-                # إضافة الوقت إن وجد
-                time = clean_text(game.find(class_='match-time').text)
-
-                if home and away:
-                    matches_data.append({
-                        "home": home,
-                        "away": away,
-                        "score": score if score else "VS",
-                        "time": time
-                    })
+                # تنظيف النتيجة
+                if not score: score = "VS"
+                
+                matches_data.append({
+                    "home": home,
+                    "away": away,
+                    "score": score,
+                    "time": "LIVE"
+                })
             except:
                 continue
 
-        # إذا لم نجد بيانات (بسبب اختلاف الكلاسات) نضع رسالة خطأ مؤقتة لنعرف
+        # إذا لم نجد بيانات، نضع رسالة حالة
         if not matches_data:
-            print("لم يتم العثور على مباريات، يجب مراجعة أسماء الـ Classes")
-            # سنضيف بيانات وهمية للتجربة فقط حتى نضبط الكود
+            print("⚠️ لم يتم استخراج مباريات، قد تكون الكلاسات تغيرت.")
             matches_data.append({
-                "home": "Scraper Test", 
-                "away": "Check Logs", 
-                "score": datetime.now().strftime("%H:%M")
+                "home": "No Live Matches",
+                "away": "Try Later",
+                "score": "-",
+                "time": datetime.now().strftime("%H:%M")
             })
+        else:
+            print(f"✅ تم سحب {len(matches_data)} مباراة بنجاح.")
 
-        # حفظ البيانات في ملف JSON
+        # حفظ الملف
         with open('matches.json', 'w', encoding='utf-8') as f:
             json.dump(matches_data, f, ensure_ascii=False, indent=2)
-            
-        print("Done! Data saved to matches.json")
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Error: {e}")
+        # تسجيل الخطأ في الملف لنراه
+        with open('matches.json', 'w', encoding='utf-8') as f:
+            json.dump([{"home": "Error", "away": str(e), "score": "X"}], f)
 
 if __name__ == "__main__":
     scrape_scoreaxis()
