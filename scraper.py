@@ -1,97 +1,78 @@
 import requests
-from bs4 import BeautifulSoup
 import json
-import random
-import time
 from datetime import datetime
 
-def scrape_scoreaxis():
-    url = "https://www.scoreaxis.com/"
-    
-    # قائمة بمتصفحات مختلفة للخداع
-    user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0'
-    ]
+def scrape_espn():
+    # رابط API الخاص بـ ESPN (الدوري الإنجليزي + أهم المباريات)
+    # يمكن تغيير الرابط لجلب دوريات أخرى
+    url = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard"
     
     headers = {
-        'User-Agent': random.choice(user_agents),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Referer': 'https://www.google.com/',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
 
     try:
-        # ننتظر ثانية عشوائية لتقليل الشك
-        time.sleep(2)
-        
-        session = requests.Session()
-        response = session.get(url, headers=headers, timeout=15)
-        
-        if response.status_code == 403:
-            print("❌ الموقع لا يزال يحظر الاتصال (Error 403).")
-            # محاولة احتياطية: استخدام رابط Widget مباشر (أسهل في السحب)
-            url = "https://www.scoreaxis.com/widget/live-matches/8920" 
-            print("🔄 جاري المحاولة مع رابط الـ Widget...")
-            response = session.get(url, headers=headers, timeout=15)
-
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        data = response.json()
         matches_data = []
 
-        # البحث في الـ Widget (بنية مختلفة قليلاً وأسهل)
-        match_rows = soup.find_all('div', class_='match-row') # محاولة 1
+        # الدخول في تفاصيل ملف الـ JSON الخاص بـ ESPN
+        events = data.get('events', [])
         
-        if not match_rows:
-            match_rows = soup.select('.match-container, .event-row') # محاولة 2
+        print(f"✅ وجدنا {len(events)} مباريات في القائمة.")
 
-        print(f"✅ تم العثور على {len(match_rows)} عنصر محتمل.")
-
-        for item in match_rows:
+        for event in events:
             try:
-                # استخراج الأسماء بناء على الكلاسات الشائعة في الودجت
-                home = item.find(class_='home').text.strip()
-                away = item.find(class_='away').text.strip()
-                score = item.find(class_='score').text.strip()
+                competitions = event.get('competitions', [{}])[0]
+                competitors = competitions.get('competitors', [])
                 
-                # تنظيف النتيجة
-                if not score: score = "VS"
+                # استخراج الفريقين
+                home_team = next((team for team in competitors if team['homeAway'] == 'home'), None)
+                away_team = next((team for team in competitors if team['homeAway'] == 'away'), None)
                 
-                matches_data.append({
-                    "home": home,
-                    "away": away,
-                    "score": score,
-                    "time": "LIVE"
-                })
-            except:
+                if home_team and away_team:
+                    home_name = home_team['team']['name']
+                    away_name = away_team['team']['name']
+                    
+                    # استخراج النتيجة
+                    home_score = home_team.get('score', '0')
+                    away_score = away_team.get('score', '0')
+                    
+                    # حالة المباراة (مباشر - انتهت - لم تبدأ)
+                    status = event.get('status', {}).get('type', {}).get('shortDetail', '')
+
+                    matches_data.append({
+                        "home": home_name,
+                        "away": away_name,
+                        "score": f"{home_score} - {away_score}",
+                        "time": status
+                    })
+            except Exception as e:
+                print(f"خطأ في مباراة واحدة: {e}")
                 continue
 
-        # إذا لم نجد بيانات، نضع رسالة حالة
+        # إذا لم تكن هناك مباريات (مثل أوقات الصباح الباكر)، نضع رسالة
         if not matches_data:
-            print("⚠️ لم يتم استخراج مباريات، قد تكون الكلاسات تغيرت.")
             matches_data.append({
-                "home": "No Live Matches",
-                "away": "Try Later",
+                "home": "No Matches",
+                "away": "Right Now",
                 "score": "-",
                 "time": datetime.now().strftime("%H:%M")
             })
-        else:
-            print(f"✅ تم سحب {len(matches_data)} مباراة بنجاح.")
 
-        # حفظ الملف
+        # حفظ البيانات بنفس التنسيق اللي بلوجر مستنيه
         with open('matches.json', 'w', encoding='utf-8') as f:
             json.dump(matches_data, f, ensure_ascii=False, indent=2)
+            
+        print("✅ تم تحديث البيانات بنجاح!")
 
     except Exception as e:
         print(f"❌ Error: {e}")
-        # تسجيل الخطأ في الملف لنراه
+        # تسجيل الخطأ
         with open('matches.json', 'w', encoding='utf-8') as f:
-            json.dump([{"home": "Error", "away": str(e), "score": "X"}], f)
+            json.dump([{"home": "Error", "away": "Check Logs", "score": "X", "time": "Err"}], f)
 
 if __name__ == "__main__":
-    scrape_scoreaxis()
+    scrape_espn()
