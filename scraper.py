@@ -1,24 +1,27 @@
 import requests
 import json
-import time
-from datetime import datetime, timedelta
+import email.utils as eut
+from datetime import datetime
 
-def get_real_time():
-    """دالة لجلب الوقت الحقيقي من الإنترنت لتجنب أخطاء السيرفر"""
+def get_google_time():
+    """
+    دالة ذكية لجلب التوقيت الحقيقي من سيرفرات جوجل
+    لتجاهل توقيت سيرفر جيت هب الخاطئ (2026)
+    """
     try:
-        # نجلب التوقيت العالمي UTC
-        response = requests.get("http://worldtimeapi.org/api/timezone/Etc/UTC", timeout=5)
-        data = response.json()
-        # نأخذ التاريخ فقط (أول 10 حروف YYYY-MM-DD)
-        date_str = data['datetime'][:10]
-        print(f"🌍 التوقيت الحقيقي من الإنترنت: {date_str}")
-        return datetime.strptime(date_str, "%Y-%m-%d")
+        response = requests.head("https://www.google.com", timeout=5)
+        date_str = response.headers['Date']
+        # تحويل صيغة التاريخ من الهيدر إلى تاريخ بايثون
+        real_time = eut.parsedate_to_datetime(date_str)
+        print(f"✅ التوقيت الحقيقي من جوجل: {real_time.strftime('%Y-%m-%d')}")
+        return real_time
     except Exception as e:
-        print(f"⚠️ تعذر جلب التوقيت من الإنترنت، نستخدم توقيت السيرفر: {e}")
+        print(f"⚠️ فشل جلب توقيت جوجل: {e}")
+        # محاولة أخيرة مع موقع آخر
         return datetime.now()
 
-def scrape_smart_calendar():
-    # 1. إعدادات الدوريات (الأهم فالأهم)
+def scrape_today_only():
+    # 1. قائمة الدوريات الهامة
     leagues = [
         {"name": "EPL", "url": "eng.1"},       # إنجليزي
         {"name": "La Liga", "url": "esp.1"},   # إسباني
@@ -27,84 +30,85 @@ def scrape_smart_calendar():
         {"name": "Ligue 1", "url": "fra.1"},   # فرنسي
         {"name": "UCL", "url": "uefa.champions"}, # أبطال أوروبا
         {"name": "CAF CL", "url": "caf.champions"}, # أبطال أفريقيا
+        {"name": "KSA League", "url": "sau.1"}, # الدوري السعودي
+        {"name": "EGY League", "url": "egy.1"}   # الدوري المصري
     ]
     
-    # 2. تحديد "اليوم" بناءً على التوقيت الحقيقي
-    today = get_real_time()
-    
-    # سنبحث في: 3 أيام ماضي + اليوم + 14 يوم مستقبل (لتقليل الضغط وضمان السرعة)
-    # المجموع حوالي 18 يوم وهو كافي جداً للموقع
-    days_priority = [0, -1, 1] 
-    days_priority.extend(range(2, 15))   # أسبوعين قدام
-    days_priority.extend(range(-2, -4, -1)) # يومين ورا زيادة
+    # 2. الحصول على تاريخ اليوم الحقيقي
+    today = get_google_time()
+    date_api = today.strftime("%Y%m%d")      # الصيغة للرابط (20250125)
+    date_display = today.strftime("%Y-%m-%d") # الصيغة للعرض (2025-01-25)
+
+    print(f"🚀 جاري سحب مباريات اليوم فقط ({date_display})...")
     
     all_matches = []
-    processed_dates = set()
-
-    print(f"🚀 بدء سحب المباريات بناءً على تاريخ: {today.strftime('%Y-%m-%d')}")
-
-    for day_offset in days_priority:
-        current_date = today + timedelta(days=day_offset)
-        date_api = current_date.strftime("%Y%m%d")
-        date_display = current_date.strftime("%Y-%m-%d")
-
-        if date_display in processed_dates:
-            continue
-        processed_dates.add(date_display)
-
-        print(f"📅 فحص تاريخ: {date_display} ...")
-        
-        matches_in_day = 0
-
-        for league in leagues:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league['url']}/scoreboard?dates={date_api}"
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-
-            try:
-                response = requests.get(url, headers=headers, timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    events = data.get('events', [])
-                    
-                    for event in events:
-                        competitions = event.get('competitions', [{}])[0]
-                        competitors = competitions.get('competitions', [])
-                        
-                        home = next((t for t in competitors if t['homeAway'] == 'home'), None)
-                        away = next((t for t in competitors if t['homeAway'] == 'away'), None)
-                        
-                        if home and away:
-                            status = event.get('status', {}).get('type', {})
-                            match_status = status.get('shortDetail', '')
-                            is_live = status.get('state') == 'in'
-                            
-                            all_matches.append({
-                                "date": date_display,
-                                "league": league['name'],
-                                "home": home['team']['name'],
-                                "away": away['team']['name'],
-                                "home_score": home.get('score', '0'),
-                                "away_score": away.get('score', '0'),
-                                "home_logo": home['team'].get('logo', ''),
-                                "away_logo": away['team'].get('logo', ''),
-                                "status": match_status,
-                                "live": is_live,
-                                "timestamp": date_api
-                            })
-                            matches_in_day += 1
-            except:
-                continue
-        
-        if matches_in_day > 0:
-            print(f"   ✅ تم العثور على {matches_in_day} مباراة.")
-
-    # ترتيب حسب التاريخ
-    all_matches.sort(key=lambda x: (x['timestamp'], x['league']))
-
-    print(f"🏁 تم الانتهاء! إجمالي المباريات: {len(all_matches)}")
     
+    for league in leagues:
+        # رابط ESPN لمباريات اليوم المحدد
+        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league['url']}/scoreboard?dates={date_api}"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                events = data.get('events', [])
+                
+                for event in events:
+                    competitions = event.get('competitions', [{}])[0]
+                    competitors = competitions.get('competitions', [])
+                    
+                    home = next((t for t in competitors if t['homeAway'] == 'home'), None)
+                    away = next((t for t in competitors if t['homeAway'] == 'away'), None)
+                    
+                    if home and away:
+                        status = event.get('status', {}).get('type', {})
+                        match_status = status.get('shortDetail', '') # النتيجة أو الوقت
+                        state = status.get('state', '') # pre, in, post
+                        is_live = (state == 'in')
+
+                        # تجميع بيانات المباراة
+                        match_data = {
+                            "league": league['name'],
+                            "date": date_display,
+                            "home": home['team']['name'],
+                            "away": away['team']['name'],
+                            "home_score": home.get('score', '0'),
+                            "away_score": away.get('score', '0'),
+                            "home_logo": home['team'].get('logo', ''),
+                            "away_logo": away['team'].get('logo', ''),
+                            "status": match_status,
+                            "live": is_live,
+                            "timestamp": date_api
+                        }
+                        all_matches.append(match_data)
+        except Exception as e:
+            print(f"خطأ في دوري {league['name']}: {e}")
+            continue
+
+    # حفظ البيانات
+    print(f"🏁 تم الانتهاء! عدد مباريات اليوم: {len(all_matches)}")
+    
+    if len(all_matches) == 0:
+        # إضافة رسالة وهمية لكي لا يظهر الموقع فارغاً إذا لم تكن هناك مباريات
+        all_matches.append({
+            "league": "Info",
+            "date": date_display,
+            "home": "لا توجد مباريات",
+            "away": "جارية الآن",
+            "home_score": "-",
+            "away_score": "-",
+            "home_logo": "",
+            "away_logo": "",
+            "status": "No Matches",
+            "live": False
+        })
+
     with open('matches.json', 'w', encoding='utf-8') as f:
         json.dump(all_matches, f, ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
-    scrape_smart_calendar()
+    scrape_today_only()
